@@ -69,13 +69,14 @@ public:
 
   std::string file_name_, cloud_topic_;
   size_t period_ms_;
+  bool latch_;
 
   std::shared_ptr<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>> pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   ////////////////////////////////////////////////////////////////////////////////
   explicit PCDPublisher(const rclcpp::NodeOptions & options)
-  : rclcpp::Node("pcd_publisher", options), tf_frame_("/base_link")
+  : rclcpp::Node("pcd_publisher", options), tf_frame_("/base_link"), latch_(false)
   {
     // Maximum number of outgoing messages to be queued for delivery to subscribers = 1
 
@@ -83,6 +84,7 @@ public:
     tf_frame_ = this->declare_parameter("tf_frame", tf_frame_);
     period_ms_ = this->declare_parameter("publishing_period_ms", 3000);
     file_name_ = this->declare_parameter<std::string>("file_name");
+    latch_ = this->declare_parameter("latch", false);
 
     if (file_name_ == "" || pcl::io::loadPCDFile(file_name_, cloud_) == -1) {
       RCLCPP_ERROR(this->get_logger(), "failed to open PCD file");
@@ -95,18 +97,27 @@ public:
     auto resolved_cloud_topic =
       this->get_node_topics_interface()->resolve_topic_name(cloud_topic_);
 
-    pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(cloud_topic_, 10);
+    auto qos = rclcpp::QoS(10);
+    if (latch_) {
+      qos = qos.transient_local();
+    }
+    pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(cloud_topic_, qos);
     timer_ = this->create_wall_timer(
       std::chrono::milliseconds(period_ms_),
       [this]() {
         this->publish();
       });
 
+    std::string latch_info("");
+    if (latch_) {
+      latch_info = "latched ";
+    }
     RCLCPP_INFO(
       this->get_logger(),
-      "Publishing data with %d points (%s) on topic %s in frame %s.",
+      "Publishing data with %d points (%s) on %stopic %s in frame %s.",
       nr_points,
       fields_list.c_str(),
+      latch_info.c_str(),
       resolved_cloud_topic.c_str(),
       cloud_.header.frame_id.c_str());
   }
